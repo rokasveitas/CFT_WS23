@@ -1,10 +1,15 @@
+
+
+module IsingRadQuant
+
 using LinearAlgebra, Plots, Serialization, Combinatorics, PyCall
 
+export uv, FermiOp, γ, γdag, γstring, bogvacstring, γsnorm, timeevstr
+export σσ, ε_state, σσε, two_σ, four_σ, equaltime_g, g_full, g_exact, g_polar
 
-let
-
+# bogolyubov transformation
 # γ_k = uk c_k + vk cdag_-k
-function uv(k; h=0)
+function uv(k)
 	v = cos(k) - 1  - sqrt(2 - 2 * cos(k))
 	u = sin(k)
 
@@ -63,12 +68,26 @@ function γdag(γs::Vector)
 	return newγs
 end
 
-function Base.:*(g::FermiOp, a::Complex)
+function Base.:*(g::FermiOp, a)
 	return FermiOp(g.U * a, g.V * a, g.N)
 end
 
-function Base.:/(g::FermiOp, a::Complex)
+function Base.:*(a, g::FermiOp)
+	return FermiOp(g.U * a, g.V * a, g.N)
+end
+
+function Base.:/(g::FermiOp, a)
 	return FermiOp(g.U / a, g.V / a, g.N)
+end
+
+function Base.:+(g::FermiOp, h::FermiOp)
+	@assert g.N == h.N
+	return FermiOp(g.U + h.U, g.V + h.V, g.N)
+end
+
+function Base.:-(g::FermiOp, h::FermiOp)
+	@assert g.N == h.N
+	return FermiOp(g.U .- h.U, g.V .- h.V, g.N)
 end
 
 γdag(g::FermiOp) = FermiOp(conj(g.V), conj(g.U), g.N)
@@ -99,6 +118,17 @@ function γsnorm(γs)
 
 	@show norm2
 	return sqrt(real(norm2))
+end
+
+
+# Returns the string over the bc basis that evolves by imag. time τ=t
+function timeevstr(N, t; pbc=false)
+	ks = [(n - (pbc ? 0 : 1/2))*2*pi/N for n in 1:N]
+	
+	Astring = [(exp(t * 4 * abs(sin(k/2))) - 2) * γdag(γ(k, N)) + γ(k, N) for k in ks]
+	Bstring = [exp(-t/2 * 4 * abs(sin(k/2))) * (γdag(γ(k, N)) - γ(k, N))  for k in ks]
+
+	return [Astring Bstring][:]
 end
 
 function σσ(N)
@@ -169,6 +199,28 @@ function four_σ(N, j)
 	return γstring(γs) / γsnorm(bogvacstring(N, true))^2
 end
 
+function four_σ(N, j, t)
+	γs = γdag(bogvacstring(N, true))
+
+	append!(γs, γdag(timeevstr(N, -t, pbc=false)))
+	σ1 = FermiOp([im, zeros(N-1)...], [1., zeros(N-1)...], N)
+	append!(γs, timeevstr(N, t, pbc=false))
+
+	σj = FermiOp([zeros(j-1)..., im, zeros(N-j)...], [zeros(j-1)..., 1., zeros(N-j)...], N)
+	push!(γs, σ1, σj)
+
+	Astring = [FermiOp([zeros(k-1)..., im, zeros(N-k)...], [zeros(k-1)..., 1., zeros(N-k)...], N) for k=1:j-1]
+	Bstring = [FermiOp([zeros(k-1)..., im, zeros(N-k)...], [zeros(k-1)...,-1., zeros(N-k)...], N) for k=1:j-1]
+
+	σzstring = [Astring Bstring][:]
+	append!(γs, σzstring)
+
+	append!(γs, bogvacstring(N, true))
+
+	return γstring(γs) / γsnorm(bogvacstring(N, true))^2
+
+end
+
 
 function equaltime_g(N, j)
 
@@ -179,18 +231,22 @@ function equaltime_g(N, j)
 	return num / den
 end
 
-@time println(γsnorm(bogvacstring(4, false)))
-@time println(γsnorm(bogvacstring(4, true)))
+function g_full(N, j, t)
+	num = four_σ(N, j, t)
 
-@time println(σσ(4))
+	den = σσ(N)^2
 
+	return num / den
+end
 
-Ns = 4:2:20
-σσs = σσ.(Ns)
-println(σσs)
+function g_exact(Z, Zb)
+	Z, Zb = Z + 0.0im, Zb +0.0im
+	out  = sqrt(1. - sqrt(1. - Z)) * sqrt(1. - sqrt(1. - Zb)) / 2 / (1. - Z)^(1/8) / (1. - Zb)^(1/8)
+	out += sqrt(1. + sqrt(1. - Z)) * sqrt(1. + sqrt(1. - Zb)) / 2 / (1. - Z)^(1/8) / (1. - Zb)^(1/8)
+	return out
+end
 
-plot(abs.(σσs), Ns; xaxis=:log, yaxis=:log)
-
+g_polar(r, θ) = g_exact(r * exp(im * θ), r * exp(-im * θ))
 
 
 end
