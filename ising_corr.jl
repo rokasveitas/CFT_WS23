@@ -3,160 +3,184 @@ using LinearAlgebra, Plots, Serialization, Combinatorics, PyCall
 
 let
 
+# γ_k = uk c_k + vk cdag_-k
+function uv(k; h=0)
+	v = cos(k) - 1  - sqrt(2 - 2 * cos(k))
+	u = sin(k)
 
-function uv(k)
-	u = cos(k) - 1 - sqrt(2 - 2 * cos(k))
-	v = sin(k)
-
-	return k==0 ? [-1/sqrt(2), 1/sqrt(2)] : [u,v] / norm([u,v])
+	return k==0 ? [1/sqrt(2), -1/sqrt(2)] : [u,v] / norm([u,v])
 end
 
-fourier_vec(k, N) = exp.(-im * k * (1:N)) / sqrt(N)
+struct FermiOp
+	U::Vector
+	V::Vector
+	N::Integer
+	
+end
 
-function γ_dec(k, N)
+function γ(k, N)
 	U = zeros(Complex{Float64}, N)
 	V = zeros(Complex{Float64}, N)
 	
 	if k == 0.
-		fill!(U, 1/sqrt(N))
-		return U, V
+		fill!(V, 1/sqrt(N))
+		return FermiOp(U, V, N)
 	end
 	uvk = uv(k)
 
 	U = fourier_vec(k, N) * uvk[2]
 	V = conj(fourier_vec(-k,N)) * uvk[1]
 
-	return U, V
+	return FermiOp(U, V, N)
 end
 
-function γdag_dec(k, N)
-	U, V = γ_dec(k, N)
-
-	return conj(V), conj(U)
+function γdag(k, N)
+	γdagop = γ(k, N)
+	return FermiOp(conj(γdagop.V), conj(γdagop.U), N)
 end
+
+fourier_vec(k, N) = exp.(-im * k * (1:N)) / sqrt(N)
+
 
 pf = pyimport("pfapack.pfaffian")
 
+function γstring(γs)
+	U = vcat([transpose(g.U) for g in γs]...)
+	V = vcat([transpose(g.V) for g in γs]...)
+
+	A = UpperTriangular(U * transpose(V))
+	A = A - transpose(A)
+
+	return pf.pfaffian(A)
+end
+
+function γdag(γs::Vector)
+	newγs = reverse(γs)
+	for (i,g) in enumerate(newγs)
+		newγs[i] = FermiOp(conj(g.V), conj(g.U), g.N)
+	end
+
+	return newγs
+end
+
+function Base.:*(g::FermiOp, a::Complex)
+	return FermiOp(g.U * a, g.V * a, g.N)
+end
+
+function Base.:/(g::FermiOp, a::Complex)
+	return FermiOp(g.U / a, g.V / a, g.N)
+end
+
+γdag(g::FermiOp) = FermiOp(conj(g.V), conj(g.U), g.N)
+
+function bogvacstring(N, pbc=true)
+	if pbc
+		γs = FermiOp[ γ(0., N) ]
+
+		for n in 1:(N÷2-1)
+			push!(γs, γ(-2*pi*n/N, N) / uv(2*pi*n/N)[2])
+			push!(γs, γ( 2*pi*n/N, N) / uv(2*pi*n/N)[1])
+		end
+		return γs
+	else
+		γs = FermiOp[]
+
+		for n in 1:N÷2
+			push!(γs, γ(-(n - 1/2) * 2*pi/N, N) / uv((n - 1/2) * 2*pi/N)[2])
+			push!(γs, γ( (n - 1/2) * 2*pi/N, N) / uv((n - 1/2) * 2*pi/N)[1])
+		end
+
+		return γs
+	end
+end
+
+function γsnorm(γs)
+	norm2 = γstring(vcat(γdag(γs), γs))
+
+	@show norm2
+	return sqrt(real(norm2))
+end
+
 function σσ(N)
-	U = zeros(Complex{Float64}, 2*N, N)
-	V = zeros(Complex{Float64}, 2*N, N)
+	γs = γdag(bogvacstring(N, false))
+	# σ1 = c_1 + cdag_1
+	σ1 = FermiOp([1., zeros(N-1)...], [-1. * im, zeros(N-1)...], N)
+	push!(γs, σ1)
+	append!(γs, bogvacstring(N, true))
 
-	# <φ_I|
-	for n=1:N÷2
-
-		k = (n - 1/2) * 2*pi/N
-		un, vn = γdag_dec(k, N)
-		unegn, vnegn = γdag_dec(-k, N)
-
-		U[2*n-1, :] = un
-		U[2*n, :]   = unegn
-
-		V[2*n-1, :] = vn
-		V[2*n, :]   = vnegn
-	end
-
-	# c_1 + cdag_1
-	U[N+1, 1] = 1.
-	V[N+1, 1] = 1.
-
-	# γ0
-	γ0dec = γ_dec(0., N)
-	U[N+2, :] = γ0dec[1]
-	V[N+2, :] = γ0dec[2]
-
-	# |φ_σ>
-	for n=1:(N÷2 - 1)
-		k = 2*pi*n / N
-		unegn, vnegn = γ_dec(-k, N)
-		un, vn = γ_dec(k, N)
-
-		U[N+2+2*n-1, :] = unegn
-		U[N+2+2*n  , :] = un
-
-		V[N+2+2*n-1, :] = vnegn
-		V[N+2+2*n  , :] = vn
-	end
-
-	A = UpperTriangular(U * V')
-	A = A - transpose(A)
-	# display(real.(A))
-	# println()
-	# @show norm(A)
-	# @show norm(real.(A))
-	# @show norm(imag.(A))
-	# @show norm(A - A')
-	# @show norm(A - transpose(A))
-	# @show norm(A + A')
-	# @show norm(A + transpose(A))
-	display(eigvals(A))
-	println()
-	return pf.pfaffian(A) / sqrt(norm_pbc_bogvac(N)) / sqrt(norm_abc_bogvac(N))
-end
-
-function norm_pbc_bogvac(N)
-	U = zeros(Complex{Float64}, N - 1, N)
-	V = zeros(Complex{Float64}, N - 1, N)
-	
-	# γ0
-	#γ0dec = γ_dec(0., N)
-	#U[1, :] = γ0dec[1]
-	#V[1, :] = γ0dec[2]
-
-	for n=1:(N÷2 - 1)
-		k = 2*pi*n / N
-		unegn, vnegn = γ_dec(-k, N)
-		un, vn = γ_dec(k, N)
-
-		U[2*n  , :] = unegn
-		U[2*n+1, :] = un
-
-		V[2*n  , :] = vnegn
-		V[2*n+1, :] = vn
-	end
-
-	fullU = vcat(conj(V)[end:-1:2, :], U[2:end,:])
-	fullV = vcat(conj(U)[end:-1:2, :], V[2:end,:])
-
-
-	A = UpperTriangular(fullU * fullV')
-	A = A - transpose(A)
-	println(pf.pfaffian(A))
-	return pf.pfaffian(A)
+	return γstring(γs) / γsnorm(bogvacstring(N, false)) / γsnorm(bogvacstring(N, true))
 end
 
 
-function norm_abc_bogvac(N)
-	U = zeros(Complex{Float64}, N , N)
-	V = zeros(Complex{Float64}, N , N)
-	
-	# γ0
-	#γ0dec = γ_dec(0., N)
-	#U[1, :] = γ0dec[1]
-	#V[1, :] = γ0dec[2]
+function ε_state(N)
+	γs = bogvacstring(N, false)
 
-	for n=1:(N÷2)
-		k = 2*pi*(n - 1/2) / N
-		unegn, vnegn = γ_dec(-k, N)
-		un, vn = γ_dec(k, N)
+	insert!(γs, 1, γdag(γ(-pi/N, N)))
+	insert!(γs, 1, γdag(γ( pi/N, N)))
 
-		U[2*n-1, :] = unegn
-		U[2*n  , :] = un
+	return γs
+end
 
-		V[2*n-1, :] = vnegn
-		V[2*n  , :] = vn
-	end
+function σσε(N)
+	γs = γdag(bogvacstring(N, true))
 
-	fullU = vcat(conj(V)[end:-1:1, :], U[1:end,:])
-	fullV = vcat(conj(U)[end:-1:1, :], V[1:end,:])
+	σ1 = FermiOp([im, zeros(N-1)...], [1., zeros(N-1)...], N)
+	push!(γs, σ1)
 
+	append!(γs, ε_state(N))
 
-	A = UpperTriangular(fullU * fullV')
-	A = A - transpose(A)
-	println(pf.pfaffian(A))
-	return pf.pfaffian(A)
+	return γstring(γs) / γsnorm(bogvacstring(N, true)) / γsnorm(ε_state(N))
+end
+
+function two_σ(N, j)
+	γs = γdag(bogvacstring(N, false))
+
+	σ1 = FermiOp([im, zeros(N-1)...], [1., zeros(N-1)...], N)
+	σj = FermiOp([zeros(j-1)..., im, zeros(N-j)...], [zeros(j-1)..., 1., zeros(N-j)...], N)
+	push!(γs, σ1, σj)
+
+	Astring = [FermiOp([zeros(k-1)..., im, zeros(N-k)...], [zeros(k-1)..., 1., zeros(N-k)...], N) for k=1:j-1]
+	Bstring = [FermiOp([zeros(k-1)..., im, zeros(N-k)...], [zeros(k-1)...,-1., zeros(N-k)...], N) for k=1:j-1]
+
+	σzstring = [Astring Bstring][:]
+	append!(γs, σzstring)
+
+	append!(γs, bogvacstring(N, false))
+
+	return γstring(γs) / γsnorm(bogvacstring(N, false))^2
 end
 
 
+function four_σ(N, j)
+	γs = γdag(bogvacstring(N, true))
+
+	σ1 = FermiOp([im, zeros(N-1)...], [1., zeros(N-1)...], N)
+	σj = FermiOp([zeros(j-1)..., im, zeros(N-j)...], [zeros(j-1)..., 1., zeros(N-j)...], N)
+	push!(γs, σ1, σj)
+
+	Astring = [FermiOp([zeros(k-1)..., im, zeros(N-k)...], [zeros(k-1)..., 1., zeros(N-k)...], N) for k=1:j-1]
+	Bstring = [FermiOp([zeros(k-1)..., im, zeros(N-k)...], [zeros(k-1)...,-1., zeros(N-k)...], N) for k=1:j-1]
+
+	σzstring = [Astring Bstring][:]
+	append!(γs, σzstring)
+
+	append!(γs, bogvacstring(N, true))
+
+	return γstring(γs) / γsnorm(bogvacstring(N, true))^2
+end
+
+
+function equaltime_g(N, j)
+
+	num = four_σ(N, j)
+
+	den = σσ(N)^2
+
+	return num / den
+end
+
+@time println(γsnorm(bogvacstring(4, false)))
+@time println(γsnorm(bogvacstring(4, true)))
 
 @time println(σσ(4))
 
