@@ -116,7 +116,7 @@ end
 function γsnorm(γs)
 	norm2 = γstring(vcat(γdag(γs), γs))
 
-	@show norm2
+	#@show norm2
 	return sqrt(real(norm2))
 end
 
