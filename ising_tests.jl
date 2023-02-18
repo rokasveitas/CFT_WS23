@@ -28,7 +28,7 @@ end
 
 Ns = 100:4:148
 
-@time σσs = σσ.(Ns)
+@time σσs = σσ.(Ns) # 6.490011 sec, 47.37% compilation
 
 #scatter(Ns, abs.(σσs); yaxis=:log, xaxis=:log)
 #savefig("ising_σσ.pdf")
@@ -40,11 +40,27 @@ Ns = 100:4:148
 
 # Next calculate <φ_σ|σ_1^x|φ_ε> ~ A * <σσε> = A λ_σσε / N^(Δ_σ) to find λ_σσε = 1/2
 
-@time λ = abs(σσε(100) / σσ(100))
+@time λ = abs(σσε(100) / σσ(100)) # 0.393167 sec, 47.49% compilation
 
-@show λ 
+@show λ  #  0.49996915621782684 ≈ 1/2
 
 
+# Now calculate <φ_σ|σ_1^x σ_j^x|φ_σ> ~ <σσσσ> ~ A^2 g(z,zbar) / N^(2Δ), so g(z,zbar) = <σσσσ> / <σσ>^2.  This only works on unit circle, z*zbar=1
+
+N = 100
+
+@time gs_num = [equaltime_g(N, j) for j=1:100] # 31.949648 sec, 21.05% compilation
+
+θs = 0:0.001:2*pi
+@time gs_ana = [g_polar(1., θ) for θ in θs] # 0.162349 sec, 97.27% compilation
+
+@time scatter((1:100)*2*pi/100 .- 2*pi/100, abs.(gs_num); label="Numerical")
+@time plot!(θs, abs.(gs_ana); color=:red, label="Exact")
+
+@time savefig("equaltime_gs_test.pdf") # This plot shows both the numerical and exact results superimposed
+
+scatter((1:100)*2*pi/100 .- 2*pi/100,abs.(gs_num) .- abs.([g_polar(1., θ) for θ in (1:100)*2*pi/100 .- 2*pi/100])) 
+savefig("equaltime_gs_err.pdf") # This plot shows the difference in magnitudes between the numerical and exact results
 
 
 
